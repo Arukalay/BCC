@@ -1,0 +1,20 @@
+# Окружение и секреты
+.env
+.venv/
+venv/
+env/
+
+# Python кэш и артефакты тестов
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Системные файлы и IDE
+.DS_Store
+.idea/
+.vscode/
+
+# ВАЖНО: report*.md НЕ игнорируем, так как сгенерированный отчёт идёт в сдачу
