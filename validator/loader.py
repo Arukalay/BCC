@@ -39,7 +39,7 @@ def normalize(text: str) -> str:
 def _load_text_file(file_path: Path) -> str:
     """Читает текстовый файл (.md или .txt) в кодировке UTF-8."""
     try:
-        content = file_path.read_text(encoding="utf-8")
+        content = file_path.read_text(encoding="utf-8-sig")  # -sig: убирает BOM, если файл сохранён в Windows
     except UnicodeDecodeError as exc:
         raise DocumentLoadError(
             f"Файл '{file_path}' не удалось прочитать в кодировке UTF-8: {exc}"
@@ -51,7 +51,11 @@ def _load_text_file(file_path: Path) -> str:
 
 
 def _load_pdf_file(file_path: Path) -> str:
-    """Читает PDF постранично через pypdf и объединяет с разделителями страниц."""
+    """Читает текстовый слой PDF постранично через pypdf.
+
+    Страницы склеиваются переводом строки без служебных меток: текст агента должен совпадать с
+    документом, а предложение, перенесённое на следующую страницу, — оставаться цельным.
+    """
     try:
         from pypdf import PdfReader
     except ImportError as exc:
@@ -67,20 +71,13 @@ def _load_pdf_file(file_path: Path) -> str:
     if len(reader.pages) == 0:
         raise DocumentLoadError(f"PDF-файл '{file_path}' не содержит страниц.")
 
-    pages_text: list[str] = []
-    for idx, page in enumerate(reader.pages, start=1):
-        raw_text = page.extract_text() or ""
-        cleaned = raw_text.strip()
-        if cleaned:
-            pages_text.append(f"--- Страница {idx} ---\n{cleaned}")
-
+    pages_text = [text.strip() for page in reader.pages if (text := page.extract_text() or "").strip()]
     if not pages_text:
         raise DocumentLoadError(
             f"В PDF-файле '{file_path}' не обнаружен текстовый слой (вероятно, это скан). "
             "Для проверки такого документа требуется предварительное распознавание текста (OCR)."
         )
-
-    return "\n\n".join(pages_text)
+    return "\n".join(pages_text)
 
 
 def _format_docx_table(table) -> str:

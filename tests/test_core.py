@@ -124,6 +124,21 @@ def test_gemini_client_parse_retry_and_429_backoff(monkeypatch):
 
 
 def test_cli_end_to_end_smoke(tmp_path: Path, monkeypatch):
+    """Обвязка CLI: чтение файла -> конвейер -> отчёт в файл. Конвейер подменён заглушкой
+    (настоящий требует модель); со всем конвейером на моке CLI проверяет tests/test_cli_e2e.py."""
+    from validator.schemas import Requirement, RequirementCheck
+
+    def stub_run(text: str) -> AnalysisResult:
+        first_line = next(line.strip() for line in text.splitlines() if line.strip())
+        return AnalysisResult(
+            requirements=[Requirement(report_id="R-01", doc_id=None, section="Заглушка",
+                                      quote=first_line, short="Первый фрагмент")],
+            checks=[RequirementCheck(req_id="R-01", verdict="ok", findings=[])],
+            set_findings=[],
+        )
+
+    monkeypatch.setattr(cli.pipeline, "run", stub_run)
+    monkeypatch.setenv("LLM_PROVIDER", "gemini")  # тест не должен зависеть от провайдера в локальном .env
     monkeypatch.setenv("GEMINI_MODEL", "gemini-2.5-flash")
     inp = tmp_path / "reqs.md"
     out = tmp_path / "nested" / "report.md"

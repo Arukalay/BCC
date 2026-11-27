@@ -26,24 +26,33 @@ def _setup_logging(verbose: bool) -> None:
     )
 
 
+REPO_DIR = Path(__file__).resolve().parent.parent
+
+
 def get_agent_version() -> str:
-    """Возвращает короткий git-хеш коммита (с суффиксом -dirty при наличии правок) или 'unknown'."""
+    """Короткий git-хеш коммита агента (с суффиксом -dirty, если код изменён после коммита) или 'unknown'.
+
+    git запускается в папке проекта, а не в текущей: версия не зависит от того, откуда запущен агент.
+    Неотслеживаемые файлы (старые отчёты, .env) не считаются правкой кода.
+    """
     try:
         commit_res = subprocess.run(
             ["git", "rev-parse", "--short", "HEAD"],
             capture_output=True,
             text=True,
             check=True,
+            cwd=REPO_DIR,
         )
         version = commit_res.stdout.strip()
         if not version:
             return "unknown"
 
         status_res = subprocess.run(
-            ["git", "status", "--porcelain"],
+            ["git", "status", "--porcelain", "--untracked-files=no"],
             capture_output=True,
             text=True,
             check=False,
+            cwd=REPO_DIR,
         )
         if status_res.returncode == 0 and status_res.stdout.strip():
             version = f"{version}-dirty"
@@ -83,7 +92,11 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Главная функция CLI. Возвращает 0 при успехе и ненулевой код при ошибке."""
+    """Главная функция CLI.
+
+    Коды возврата: 0 — отчёт записан; 1 — непредвиденная ошибка; 2 — входной документ не прочитан;
+    3 — ошибка модели (ключ, квота, недоступность); 4 — отчёт не удалось записать; 130 — прервано.
+    """
     parser = _build_parser()
     args = parser.parse_args(argv)
     _setup_logging(args.verbose)
@@ -113,33 +126,38 @@ def main(argv: list[str] | None = None) -> int:
         logger.info("Загрузка документа требований: %s", input_file)
         document_text = loader.load(str(input_file))
         logger.debug("Загружено символов: %d", len(document_text))
+    except (OSError, ValueError, DocumentLoadError) as exc:
+        print(f"[ОШИБКА ВХОДНОГО ДОКУМЕНТА] {exc}", file=sys.stderr)
+        return 2
 
+    try:
         logger.info("Запуск конвейера анализа требований...")
         analysis_result = pipeline.run(document_text)
-
         meta = RunMeta(
             document_name=input_file.name,
             date=datetime.now().astimezone().isoformat(timespec="seconds"),
             model=llm.model_name(),
             agent_version=get_agent_version(),
         )
-
         logger.info("Сборка итогового отчёта...")
         report_markdown = report.build(meta, analysis_result)
-
-        output_file.parent.mkdir(parents=True, exist_ok=True)
-        output_file.write_text(report_markdown, encoding="utf-8")
-        logger.info("Отчёт успешно сохранён: %s", output_file)
-        print(f"Готово! Отчёт сохранён в '{output_file}'.")
-        return 0
-
-    except (FileNotFoundError, ValueError, DocumentLoadError) as exc:
-        print(f"[ОШИБКА ВХОДНОГО ДОКУМЕНТА] {exc}", file=sys.stderr)
-        return 2
     except LLMError as exc:
         print(f"[ОШИБКА LLM] {exc}", file=sys.stderr)
         return 3
+    except KeyboardInterrupt:
+        print("\nПрервано пользователем, отчёт не записан.", file=sys.stderr)
+        return 130
     except Exception as exc:
         logger.exception("Непредвиденная ошибка при выполнении валидатора")
         print(f"[ОШИБКА ВЫПОЛНЕНИЯ] {exc}", file=sys.stderr)
         return 1
+
+    try:
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        output_file.write_text(report_markdown, encoding="utf-8")
+    except OSError as exc:
+        print(f"[ОШИБКА ЗАПИСИ ОТЧЁТА] {exc}", file=sys.stderr)
+        return 4
+    logger.info("Отчёт успешно сохранён: %s", output_file)
+    print(f"Готово! Отчёт сохранён в '{output_file}'.")
+    return 0
